@@ -18,7 +18,7 @@ $AllDistributions = @()
 $AllDistributions += $DebianDistributions
 $AllDistributions += $RedhatDistributions
 $AllDistributions += 'macOs'
-$script:netCoreRuntime = 'net10.0'
+$script:netCoreRuntime = 'net11.0'
 $script:iconFileName = "Powershell_black_64.png"
 $script:iconPath = Join-Path -path $PSScriptRoot -ChildPath "../../assets/$iconFileName" -Resolve
 
@@ -283,6 +283,18 @@ function Start-PSPackage {
             if (-not (Test-Path -Path $manifestSpdxPathSha)) {
                 $createdSpdxPathSha = New-Item -Path $manifestSpdxPathSha -Force
                 Write-Verbose -Verbose "Created manifest.spdx.json.sha256 file: $createdSpdxPathSha"
+            }
+
+            $bsiJsonPath = (Join-Path -Path $Source "_manifest\spdx_2.2\bsi.json")
+            if (-not (Test-Path -Path $bsiJsonPath)) {
+                $createdBsiJsonPath = New-Item -Path $bsiJsonPath -Force
+                Write-Verbose -Verbose "Created bsi.json file: $createdBsiJsonPath"
+            }
+
+            $manifestCatPath = (Join-Path -Path $Source "_manifest\spdx_2.2\manifest.cat")
+            if (-not (Test-Path -Path $manifestCatPath)) {
+                $createdCatPath = New-Item -Path $manifestCatPath -Force
+                Write-Verbose -Verbose "Created manifest.cat file: $createdCatPath"
             }
         }
 
@@ -1149,11 +1161,12 @@ function New-UnixPackage {
         # Determine if the version is a preview version
         $IsPreview = Test-IsPreview -Version $Version -IsLTS:$LTS
 
-        # Preview versions have preview in the name
+        # For deb/rpm packages, use the '-lts' and '-preview' channel suffix variants to match existing names on packages.microsoft.com.
+        # For osxpkg package, only LTS packages get a channel suffix in the name.
         $Name = if($LTS) {
             "powershell-lts"
         }
-        elseif ($IsPreview) {
+        elseif ($IsPreview -and $Type -ne "osxpkg") {
             "powershell-preview"
         }
         else {
@@ -1239,15 +1252,15 @@ function New-UnixPackage {
                 # Use rpmbuild directly for RPM packages
                 if ($PSCmdlet.ShouldProcess("Create RPM package with rpmbuild")) {
                     Write-Log "Creating RPM package with rpmbuild..."
-                    
+
                     # Create rpmbuild directory structure
                     $rpmBuildRoot = Join-Path $env:HOME "rpmbuild"
                     $specsDir = Join-Path $rpmBuildRoot "SPECS"
                     $rpmsDir = Join-Path $rpmBuildRoot "RPMS"
-                    
+
                     New-Item -ItemType Directory -Path $specsDir -Force | Out-Null
                     New-Item -ItemType Directory -Path $rpmsDir -Force | Out-Null
-                    
+
                     # Generate RPM spec file
                     $specContent = New-RpmSpec `
                         -Name $Name `
@@ -1264,11 +1277,11 @@ function New-UnixPackage {
                         -LinkInfo $Links `
                         -Distribution $DebDistro `
                         -HostArchitecture $HostArchitecture
-                    
+
                     $specFile = Join-Path $specsDir "$Name.spec"
                     $specContent | Out-File -FilePath $specFile -Encoding ascii
                     Write-Verbose "Generated spec file: $specFile" -Verbose
-                    
+
                     # Log the spec file content
                     if ($env:GITHUB_ACTIONS -eq 'true') {
                         Write-Host "::group::RPM Spec File Content"
@@ -1277,7 +1290,7 @@ function New-UnixPackage {
                     } else {
                         Write-Verbose "RPM Spec File Content:`n$specContent" -Verbose
                     }
-                    
+
                     # Build RPM package
                     try {
                         # Use bash to properly handle rpmbuild arguments
@@ -1290,16 +1303,16 @@ function New-UnixPackage {
                         Write-Verbose "Running: $buildCmd" -Verbose
                         $Output = bash -c $buildCmd 2>&1
                         $exitCode = $LASTEXITCODE
-                        
+
                         if ($exitCode -ne 0) {
                             throw "rpmbuild failed with exit code $exitCode"
                         }
-                        
+
                         # Find the generated RPM
-                        $rpmFile = Get-ChildItem -Path (Join-Path $rpmsDir $HostArchitecture) -Filter "*.rpm" -ErrorAction Stop | 
-                            Sort-Object -Property LastWriteTime -Descending | 
+                        $rpmFile = Get-ChildItem -Path (Join-Path $rpmsDir $HostArchitecture) -Filter "*.rpm" -ErrorAction Stop |
+                            Sort-Object -Property LastWriteTime -Descending |
                             Select-Object -First 1
-                        
+
                         if ($rpmFile) {
                             # Copy RPM to current location
                             Copy-Item -Path $rpmFile.FullName -Destination $CurrentLocation -Force
@@ -1337,7 +1350,7 @@ function New-UnixPackage {
                             -AfterRemoveScript $AfterScriptInfo.AfterRemoveScript `
                             -HostArchitecture $HostArchitecture `
                             -CurrentLocation $CurrentLocation
-                        
+
                         $Output = @("Created package {:path=>""$($result.PackageName)""}")
                     }
                     catch {
@@ -1348,7 +1361,7 @@ function New-UnixPackage {
                 # Use native macOS packaging tools
                 if ($PSCmdlet.ShouldProcess("Create macOS package with pkgbuild/productbuild")) {
                     Write-Log "Creating macOS package with native tools..."
-                    
+
                     $macPkgArgs = @{
                         Name = $Name
                         Version = $packageVersion
@@ -1362,8 +1375,9 @@ function New-UnixPackage {
                         AppsFolder = $AppsFolder
                         HostArchitecture = $HostArchitecture
                         CurrentLocation = $CurrentLocation
+                        LTS = $LTS
                     }
-                    
+
                     try {
                         $packageFile = New-MacOSPackage @macPkgArgs
                         $Output = @("Created package {:path=>""$($packageFile.Name)""}")
@@ -1386,7 +1400,7 @@ function New-UnixPackage {
                     Clear-MacOSLauncher
                 }
             }
-            
+
             # Clean up rpmbuild directory if it was created
             if ($Type -eq 'rpm') {
                 $rpmBuildRoot = Join-Path $env:HOME "rpmbuild"
@@ -1395,7 +1409,7 @@ function New-UnixPackage {
                     Remove-Item -Path $rpmBuildRoot -Recurse -Force -ErrorAction SilentlyContinue
                 }
             }
-            
+
             if ($AfterScriptInfo.AfterInstallScript) {
                 Remove-Item -ErrorAction 'silentlycontinue' $AfterScriptInfo.AfterInstallScript -Force
             }
@@ -1489,13 +1503,13 @@ function New-MacOsDistributionPackage
 
     $resourcesDir = Join-Path -Path $tempDir -ChildPath 'resources'
     New-Item -ItemType Directory -Path $resourcesDir -Force > $null
-    
+
     # Copy background file to temp directory
     $backgroundFile = "$RepoRoot/assets/macDialog.png"
     if (Test-Path $backgroundFile) {
         Copy-Item -Path $backgroundFile -Destination $resourcesDir -Force
     }
-    
+
     # Copy the component package to temp directory
     $componentFileName = Split-Path -Leaf -Path $ComponentPackage
     $tempComponentPath = Join-Path -Path $tempDir -ChildPath $componentFileName
@@ -1506,12 +1520,17 @@ function New-MacOsDistributionPackage
 
     # Get package ID if not provided
     if (-not $PackageIdentifier) {
-        $PackageIdentifier = Get-MacOSPackageId -IsPreview:$IsPreview.IsPresent
+        if ($IsPreview.IsPresent) {
+            $PackageIdentifier = 'com.microsoft.powershell-preview'
+        }
+        else {
+            $PackageIdentifier = 'com.microsoft.powershell'
+        }
     }
 
     # Minimum OS version
     $minOSVersion = "11.0"  # macOS Big Sur minimum
-    
+
     # format distribution template with:
     # 0 - title
     # 1 - version
@@ -1522,8 +1541,10 @@ function New-MacOsDistributionPackage
     $PackagingStrings.OsxDistributionTemplate -f $PackageName, $Version, $componentFileName, $minOSVersion, $PackageIdentifier, $HostArchitecture | Out-File -Encoding utf8 -FilePath $distributionXmlPath -Force
 
     # Build final package path
-    $finalPackagePath = Join-Path $OutputDirectory "$PackageName-$Version-osx-$HostArchitecture.pkg"
-    
+    # Rename x86_64 to x64 for compatibility
+    $packageArchName = if ($HostArchitecture -eq "x86_64") { "x64" } else { $HostArchitecture }
+    $finalPackagePath = Join-Path $OutputDirectory "$PackageName-$Version-osx-$packageArchName.pkg"
+
     # Remove existing package if it exists
     if (Test-Path $finalPackagePath) {
         Write-Warning "Removing existing package: $finalPackagePath"
@@ -1542,7 +1563,7 @@ function New-MacOsDistributionPackage
                     --resources $resourcesDir `
                     $finalPackagePath
             }
-            
+
             if (Test-Path $finalPackagePath) {
                 Write-Log "Successfully created macOS package: $finalPackagePath"
             }
@@ -1612,7 +1633,7 @@ function New-RpmSpec
     # RPM doesn't allow hyphens in version, so convert them to underscores
     # e.g., "7.6.0-preview.6" becomes Version: 7.6.0_preview.6
     $rpmVersion = $Version -replace '-', '_'
-    
+
     # Build Release field with distribution suffix (e.g., "1.cm" or "1.rh")
     # Don't use RPM macros - build the full release string in PowerShell
     $rpmRelease = "$Iteration.$Distribution"
@@ -1638,7 +1659,7 @@ AutoReq:        no
     } else {
         # For cross-architecture builds, don't specify BuildArch in spec
         # The --target option will handle the architecture
-        
+
         # Disable automatic binary stripping for cross-arch builds
         # The native /bin/strip on x86_64 cannot process ARM64 binaries and would fail with:
         # "Unable to recognise the format of the input file"
@@ -1646,7 +1667,7 @@ AutoReq:        no
         # __strip: This macro controls the command used for stripping binaries during the build process.
         # /bin/true: A command that does nothing and always exits successfully, effectively bypassing the stripping process.
         $specContent += "%define __strip /bin/true`n"
-        
+
         # Disable debug package generation to prevent strip-related errors
         # Debug packages require binary stripping which fails for cross-arch builds
         # See: https://rpm-packaging-guide.github.io/#debugging
@@ -1903,11 +1924,11 @@ $(if ($extendedDescription) { $extendedDescription + "`n" })
         # Copy DEBIAN directory and data files to build root
         $buildDir = Join-Path $debBuildRoot "build"
         New-Item -ItemType Directory -Path $buildDir -Force | Out-Null
-        
+
         Write-Verbose "debianDir: $debianDir" -Verbose
         Write-Verbose "dataDir: $dataDir" -Verbose
         Write-Verbose "buildDir: $buildDir" -Verbose
-        
+
         # Use cp to preserve symlinks
         Start-NativeExecution { cp -a $debianDir "$buildDir/DEBIAN" }
         Start-NativeExecution { cp -a $dataDir/* $buildDir }
@@ -1973,7 +1994,9 @@ function New-MacOSPackage
         [Parameter(Mandatory)]
         [string]$HostArchitecture,
 
-        [string]$CurrentLocation = (Get-Location)
+        [string]$CurrentLocation = (Get-Location),
+
+        [switch]$LTS
     )
 
     Write-Log "Creating macOS package using pkgbuild and productbuild..."
@@ -2017,14 +2040,14 @@ function New-MacOSPackage
             $linkDestDir = Join-Path $pkgRoot (Split-Path $link.Destination -Parent)
             New-Item -ItemType Directory -Path $linkDestDir -Force | Out-Null
             $finalLinkPath = Join-Path $pkgRoot $link.Destination
-            
+
             Write-Verbose "Creating symlink at $finalLinkPath" -Verbose
-            
+
             # Remove if exists
             if (Test-Path $finalLinkPath) {
                 Remove-Item $finalLinkPath -Force
             }
-            
+
             # Get the target of the original symlink and recreate it in the package root
             if (Test-Path $link.Source) {
                 $linkTarget = (Get-Item $link.Source).Target
@@ -2048,12 +2071,14 @@ function New-MacOSPackage
             Copy-Item -Path "$AppsFolder/*" -Destination $appsInPkg -Recurse -Force
         }
 
-        # Build the component package using pkgbuild
-        $pkgIdentifier = Get-MacOSPackageId -IsPreview:($Name -like '*-preview')
-        
+        # Get package identifier info based on version and LTS flag
+        $packageInfo = Get-MacOSPackageIdentifierInfo -Version $Version -LTS:$LTS
+        $IsPreview = $packageInfo.IsPreview
+        $pkgIdentifier = $packageInfo.PackageIdentifier
+
         if ($PSCmdlet.ShouldProcess("Build component package with pkgbuild")) {
             Write-Log "Running pkgbuild to create component package..."
-            
+
             Start-NativeExecution -VerboseOutputOnError {
                 pkgbuild --root $pkgRoot `
                     --identifier $pkgIdentifier `
@@ -2062,7 +2087,7 @@ function New-MacOSPackage
                     --install-location "/" `
                     $componentPkgPath
             }
-            
+
             Write-Verbose "Component package created: $componentPkgPath" -Verbose
         }
 
@@ -2074,8 +2099,8 @@ function New-MacOSPackage
             -OutputDirectory $CurrentLocation `
             -HostArchitecture $HostArchitecture `
             -PackageIdentifier $pkgIdentifier `
-            -IsPreview:($Name -like '*-preview')
-        
+            -IsPreview:$IsPreview
+
         return $distributionPackage
     }
     finally {
@@ -2114,6 +2139,22 @@ function Get-PackageDependencies
 
         # These should match those in the Dockerfiles, but exclude tools like Git, which, and curl
         $Dependencies = @()
+
+        # ICU version range follows .NET runtime policy.
+        # See: https://github.com/dotnet/runtime/blob/3fe8518d51bbcaa179bbe275b2597fbe1b88bc5a/src/native/libs/System.Globalization.Native/pal_icushim.c#L235-L243
+        #
+        # Version range rationale:
+        # - The runtime supports ICU versions >= the version it was built against
+        #   and <= that version + 30, to allow sufficient headroom for future releases.
+        # - ICU typically releases about twice per year, so +30 provides roughly
+        #   15 years of forward compatibility.
+        # - On some platforms, the minimum supported version may be lower
+        #   than the build version and we know that older versions just works.
+        #
+        $MinICUVersion = 60                    # runtime minimum supported
+        $BuildICUVersion = Get-IcuLatestRelease
+        $MaxICUVersion = $BuildICUVersion + 30 # headroom
+
         if ($Distribution -eq 'deb') {
             $Dependencies = @(
                 "libc6",
@@ -2121,10 +2162,9 @@ function Get-PackageDependencies
                 "libgssapi-krb5-2",
                 "libstdc++6",
                 "zlib1g",
-                "libicu76|libicu74|libicu72|libicu71|libicu70|libicu69|libicu68|libicu67|libicu66|libicu65|libicu63|libicu60|libicu57|libicu55|libicu52",
+                (($MaxICUVersion..$MinICUVersion).ForEach{ "libicu$_" } -join '|'),
                 "libssl3|libssl1.1|libssl1.0.2|libssl1.0.0"
             )
-
         } elseif ($Distribution -eq 'rh') {
             $Dependencies = @(
                 "openssl-libs",
@@ -2266,20 +2306,44 @@ function New-ManGzip
     }
 }
 
-# Returns the macOS Package Identifier
-function Get-MacOSPackageId
+<#
+    .SYNOPSIS
+        Determines the package identifier and preview status for macOS packages.
+    .DESCRIPTION
+        This function determines if a package is a preview build based on the version string
+        and LTS flag, then returns the appropriate package identifier.
+    .PARAMETER Version
+        The version string (e.g., "7.6.0-preview.6" or "7.6.0")
+    .PARAMETER LTS
+        Whether this is an LTS build
+    .OUTPUTS
+        Hashtable with IsPreview (boolean) and PackageIdentifier (string) properties
+    .EXAMPLE
+        Get-MacOSPackageIdentifierInfo -Version "7.6.0-preview.6" -LTS:$false
+        Returns @{ IsPreview = $true; PackageIdentifier = "com.microsoft.powershell-preview" }
+#>
+function Get-MacOSPackageIdentifierInfo
 {
     param(
-        [switch]
-        $IsPreview
+        [Parameter(Mandatory)]
+        [string]$Version,
+
+        [switch]$LTS
     )
-    if ($IsPreview.IsPresent)
-    {
-        return 'com.microsoft.powershell-preview'
+
+    $IsPreview = Test-IsPreview -Version $Version -IsLTS:$LTS
+
+    # Determine package identifier based on preview status
+    if ($IsPreview) {
+        $PackageIdentifier = 'com.microsoft.powershell-preview'
     }
-    else
-    {
-        return 'com.microsoft.powershell'
+    else {
+        $PackageIdentifier = 'com.microsoft.powershell'
+    }
+
+    return @{
+        IsPreview = $IsPreview
+        PackageIdentifier = $PackageIdentifier
     }
 }
 
@@ -2293,8 +2357,9 @@ function New-MacOSLauncher
         [switch]$LTS
     )
 
-    $IsPreview = Test-IsPreview -Version $Version -IsLTS:$LTS
-    $packageId = Get-MacOSPackageId -IsPreview:$IsPreview
+    $packageInfo = Get-MacOSPackageIdentifierInfo -Version $Version -LTS:$LTS
+    $IsPreview = $packageInfo.IsPreview
+    $packageId = $packageInfo.PackageIdentifier
 
     # Define folder for launcher application.
     $suffix = if ($IsPreview) { "-preview" } elseif ($LTS) { "-lts" }
@@ -4855,7 +4920,7 @@ function New-GlobalToolNupkgSource
     }
 
     # Set VSTS environment variable for CGManifest file path.
-    $globalToolCGManifestPFilePath = Join-Path -Path "$env:REPOROOT" -ChildPath "tools\cgmanifest.json"
+    $globalToolCGManifestPFilePath = Join-Path -Path "$env:REPOROOT" -ChildPath "tools/cgmanifest/main/cgmanifest.json"
     $globalToolCGManifestFilePath = Resolve-Path -Path $globalToolCGManifestPFilePath -ErrorAction SilentlyContinue
     if (($null -eq $globalToolCGManifestFilePath) -or (! (Test-Path -Path $globalToolCGManifestFilePath)))
     {
@@ -5519,8 +5584,24 @@ function Send-AzdoFile {
         Copy-Item -Path $Path -Destination $logFile
     }
 
-    Write-Host "##vso[artifact.upload containerfolder=$newName;artifactname=$newName]$logFile"
-    Write-Verbose "Log file captured as $newName" -Verbose
+    Write-Verbose "Capture the log file as '$newName'" -Verbose
+    if($env:TF_BUILD) {
+        ## In Azure DevOps
+        Write-Host "##vso[artifact.upload containerfolder=$newName;artifactname=$newName]$logFile"
+    } elseif ($env:GITHUB_WORKFLOW -and $env:SYSTEM_ARTIFACTSDIRECTORY) {
+        ## In GitHub Actions
+        $destinationPath = $env:SYSTEM_ARTIFACTSDIRECTORY
+        Write-Verbose "Upload '$logFile' to '$destinationPath' in GitHub Action" -Verbose
+
+        # Create the folder if it does not exist
+        if (!(Test-Path -Path $destinationPath)) {
+            $null = New-Item -ItemType Directory -Path $destinationPath -Force
+        }
+
+        Copy-Item -Path $logFile -Destination $destinationPath -Force -Verbose
+    } else {
+        Write-Warning "This environment is neither Azure Devops nor GitHub Actions. Cannot capture the log file in this environment."
+    }
 }
 
 # Class used for serializing and deserialing a BOM into Json
@@ -5730,4 +5811,16 @@ function Test-IsProductFile {
     }
 
     return $false
+}
+
+# Get major version from latest ICU release (latest: stable version)
+function Get-IcuLatestRelease {
+    $response = Invoke-WebRequest -Uri "https://github.com/unicode-org/icu/releases/latest"
+    $tagUrl = ($response.Links | Where-Object href -like "*releases/tag/release-*")[0].href
+
+    if ($tagUrl -match 'release-(\d+)\.') {
+       return [int]$Matches[1]
+    }
+
+    throw "Unable to determine the latest ICU release version."
 }
