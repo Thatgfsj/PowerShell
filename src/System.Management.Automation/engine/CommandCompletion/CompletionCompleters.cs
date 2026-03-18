@@ -2504,7 +2504,8 @@ namespace System.Management.Automation
                 case "Format-Table":
                 case "Format-Wide":
                     {
-                        if (parameterName.Equals("Property", StringComparison.OrdinalIgnoreCase))
+                        if (parameterName.Equals("Property", StringComparison.OrdinalIgnoreCase)
+                         || parameterName.Equals("ExcludeProperty", StringComparison.OrdinalIgnoreCase))
                         {
                             NativeCompletionMemberName(context, result, commandAst, boundArguments?[parameterName]);
                         }
@@ -4580,8 +4581,8 @@ namespace System.Management.Automation
                     return CommandCompletion.EmptyCompletionResult;
                 }
 
-                var lastAst = context.RelatedAsts[^1];
-                if (lastAst.Parent is UsingStatementAst usingStatement
+                var lastAst = context.RelatedAsts?[^1];
+                if (lastAst?.Parent is UsingStatementAst usingStatement
                     && usingStatement.UsingStatementKind is UsingStatementKind.Module or UsingStatementKind.Assembly
                     && lastAst.Extent.File is not null)
                 {
