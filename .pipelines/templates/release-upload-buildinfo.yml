@@ -51,6 +51,8 @@ jobs:
       Import-Module "$toolsDirectory/ci.psm1"
       $jsonFile = Get-Item "$ENV:PIPELINE_WORKSPACE/PSPackagesOfficial/BuildInfoJson/*.json"
       $fileName = Split-Path $jsonFile -Leaf
+      # The build itself has already determined if it is preview or stable/LTS,
+      # we just need to check via the file name
       $isPreview = $fileName -eq "preview.json"
       $isStable = $fileName -eq "stable.json"
 
