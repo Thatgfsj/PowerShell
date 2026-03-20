@@ -51,6 +51,8 @@ jobs:
       Import-Module "$toolsDirectory/ci.psm1"
       $jsonFile = Get-Item "$ENV:PIPELINE_WORKSPACE/PSPackagesOfficial/BuildInfoJson/*.json"
       $fileName = Split-Path $jsonFile -Leaf
+      $isPreview = $fileName -eq "preview.json"
+      $isStable = $fileName -eq "stable.json"
 
       $dateTime = [datetime]::UtcNow
       $dateTime = [datetime]::new($dateTime.Ticks - ($dateTime.Ticks % [timespan]::TicksPerSecond), $dateTime.Kind)
@@ -72,7 +74,7 @@ jobs:
       $targetFile = "$ENV:PIPELINE_WORKSPACE/$fileName"
       ConvertTo-Json -InputObject $buildInfo | Out-File $targetFile -Encoding ascii
 
-      if ($fileName -eq "preview.json") {
+      if ($isPreview) {
         Set-BuildVariable -Name UploadPreview -Value YES
       } else {
         Set-BuildVariable -Name UploadPreview -Value NO
@@ -81,7 +83,7 @@ jobs:
       Set-BuildVariable -Name PreviewBuildInfoFile -Value $targetFile
 
       ## Create 'lts.json' if marked as a LTS release.
-      if ($fileName -eq "stable.json") {
+      if ($isStable) {
         if ($ltsRelease) {
           $ltsFile = "$ENV:PIPELINE_WORKSPACE/lts.json"
           Copy-Item -Path $targetFile -Destination $ltsFile -Force
